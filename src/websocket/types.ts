@@ -50,11 +50,7 @@ export interface WebSocketConfig {
  * Channel names available for subscription
  */
 export type ChannelName =
-  | "mailboxes"
-  | "messages"
-  | "settings"
-  | "filters"
-  | "autoreply";
+  "mailboxes" | "messages" | "settings" | "filters" | "autoreply";
 
 /**
  * Message types for client → server communication
