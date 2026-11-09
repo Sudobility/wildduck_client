@@ -2,8 +2,9 @@
 
 TypeScript client library for the WildDuck email API with React and React Native support.
 
-[![npm version](https://badge.fury.io/js/@sudobility%2Fwildduck_client.svg)](https://www.npmjs.com/package/@sudobility/wildduck_client)
 [![CI/CD](https://github.com/johnqh/wildduck_client/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/johnqh/wildduck_client/actions/workflows/ci-cd.yml)
+
+> Published to [GitHub Packages](https://github.com/Sudobility/wildduck_client/packages) under the `@sudobility` scope (not the public npm registry).
 
 ## Features
 
@@ -19,128 +20,125 @@ TypeScript client library for the WildDuck email API with React and React Native
 
 ## Installation
 
+This package is published under the `@sudobility` scope on **GitHub Packages**, not the public
+npm registry. Consumers must point the `@sudobility` scope at GitHub Packages (e.g. in a project
+`.npmrc`) and authenticate with a token that has `read:packages`:
+
+```
+@sudobility:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
+
 ```bash
 npm install @sudobility/wildduck_client
 ```
 
 ### Peer Dependencies
 
-This library requires the following peer dependencies:
+This library declares the following peer dependencies (you must install them yourself):
 
 ```bash
-npm install react @tanstack/react-query @sudobility/di @sudobility/types axios
+npm install react @tanstack/react-query \
+  @sudobility/di @sudobility/mail_box_types @sudobility/types
 ```
 
-## Quick Start
+> `axios` is a dev-only dependency used in tests; it is **not** bundled or required at runtime.
+> The HTTP transport is injected by the consumer via the `NetworkClient` interface from
+> `@sudobility/types`.
+
+> All hooks and the `WildduckClient` are **transport-agnostic**: they take a `NetworkClient`
+> (from `@sudobility/types`, provided by your app's DI layer) and a `WildduckConfig`
+> (`{ backendUrl, ... }`, from `@sudobility/mail_box_types`). `networkClient` below is whatever
+> your app supplies — it is not exported by this library. Authenticated calls take a
+> `WildduckUserAuth` object (`{ userId, username, accessToken }`).
 
 ### 1. Authentication
 
-```typescript
+`useWildduckAuth(networkClient, config, storage, devMode?)` returns `authenticate`, `preAuth`,
+`logout`, `getAuthStatus`, and status flags.
+
+```tsx
 import { useWildduckAuth } from '@sudobility/wildduck_client';
 
-function LoginComponent() {
-  const networkClient = useNetworkClient();
-  const config = { endpoint: 'https://api.wildduck.example.com' };
-
-  const { authenticate, isAuthenticated } = useWildduckAuth(
+function LoginComponent({ networkClient, config, storage }) {
+  const { authenticate, isAuthenticating } = useWildduckAuth(
     networkClient,
-    config
+    config,
+    storage
   );
 
-  // Authenticate with crypto signature (SIWE)
-  const handleCryptoLogin = async () => {
-    await authenticate({
+  // Blockchain signature auth (SIWE/SIWS) is the primary flow
+  const handleCryptoLogin = () =>
+    authenticate({
       username: 'user@example.com',
       signature: '0x...',
       message: 'Sign-in with Ethereum message',
       nonce: 'random-nonce',
-      signer: '0xWalletAddress'
+      signer: '0xWalletAddress',
     });
-  };
 
-  // Or authenticate with password
-  const handlePasswordLogin = async () => {
-    await authenticate({
-      username: 'user@example.com',
-      password: 'your-password'
-    });
-  };
-
-  return (
-    <div>
-      {isAuthenticated ? (
-        <p>Logged in!</p>
-      ) : (
-        <>
-          <button onClick={handleCryptoLogin}>Login with Wallet</button>
-          <button onClick={handlePasswordLogin}>Login with Password</button>
-        </>
-      )}
-    </div>
-  );
+  return <button onClick={handleCryptoLogin} disabled={isAuthenticating}>Login</button>;
 }
 ```
 
 ### 2. Fetching Messages
 
-```typescript
-import { useWildduckGetMessages } from '@sudobility/wildduck_client';
+`useWildduckMessages(networkClient, config, devMode?, pageSize?, options?)` manages a message
+list with pagination and mutations. The hook holds `messages` in state; call `getMessages` to load.
 
-function MessageList({ userAuth, mailboxId }) {
-  const networkClient = useNetworkClient();
-  const config = { endpoint: 'https://api.wildduck.example.com' };
+```tsx
+import { useEffect } from 'react';
+import { useWildduckMessages } from '@sudobility/wildduck_client';
 
-  const { getMessages } = useWildduckGetMessages(networkClient, config);
-  const [messages, setMessages] = useState([]);
+function MessageList({ networkClient, config, userAuth, mailboxId }) {
+  const { messages, getMessages, isLoading } = useWildduckMessages(networkClient, config);
 
   useEffect(() => {
-    async function fetchMessages() {
-      const result = await getMessages(userAuth, mailboxId, {
-        limit: 50,
-        unseen: true, // Only unread messages
-        order: 'desc'
-      });
-      setMessages(result.results);
-    }
-    fetchMessages();
+    getMessages(userAuth, mailboxId, { limit: 50, unseen: true, order: 'desc' });
   }, [mailboxId]);
 
+  if (isLoading) return <p>Loading…</p>;
   return (
-    <div>
-      {messages.map(msg => (
-        <div key={msg.id}>
-          <h3>{msg.subject}</h3>
-          <p>From: {msg.from.address}</p>
-          <span>{msg.unseen ? '🔵 Unread' : '✓ Read'}</span>
-        </div>
+    <ul>
+      {messages.map((msg) => (
+        <li key={msg.id}>{msg.subject}</li>
       ))}
-    </div>
+    </ul>
   );
 }
 ```
 
 ### 3. Sending Messages
 
-```typescript
-import { useWildduckSendMessage } from '@sudobility/wildduck_client';
+`sendMessage` is returned by the same `useWildduckMessages` hook.
 
-function ComposeEmail({ userAuth }) {
-  const networkClient = useNetworkClient();
-  const config = { endpoint: 'https://api.wildduck.example.com' };
+```tsx
+import { useWildduckMessages } from '@sudobility/wildduck_client';
 
-  const { sendMessage } = useWildduckSendMessage(networkClient, config);
+function ComposeEmail({ networkClient, config, userAuth }) {
+  const { sendMessage, isSending } = useWildduckMessages(networkClient, config);
 
-  const handleSend = async () => {
-    await sendMessage(userAuth, {
+  const handleSend = () =>
+    sendMessage(userAuth, {
       to: [{ name: 'John Doe', address: 'john@example.com' }],
       subject: 'Hello from WildDuck Client',
       text: 'This is a test message',
-      html: '<p>This is a <strong>test</strong> message</p>'
+      html: '<p>This is a <strong>test</strong> message</p>',
     });
-  };
 
-  return <button onClick={handleSend}>Send Email</button>;
+  return <button onClick={handleSend} disabled={isSending}>Send Email</button>;
 }
+```
+
+### Low-level client
+
+When you don't need React, use the client directly:
+
+```typescript
+import { createWildduckClient } from '@sudobility/wildduck_client';
+
+const client = createWildduckClient(networkClient, config);
+const mailboxes = await client.getMailboxes(userAuth);
 ```
 
 ## API Coverage
@@ -167,54 +165,35 @@ See [docs/GAP_ANALYSIS.md](./docs/GAP_ANALYSIS.md) for a comprehensive breakdown
 
 ## Available Hooks
 
-### Messages
+Hooks come in two styles. **Monolithic hooks** bundle a resource's query + mutations with
+auto-invalidation and are the recommended pattern for new code. **TanStack Query hooks** are thin
+`useQuery` wrappers for read-only data. A set of **individual domain hooks** remains for backward
+compatibility but is `@deprecated` and slated for removal in v3 — prefer the monolithic hooks or
+`WildduckClient` methods instead.
 
-- `useWildduckGetMessages` - List messages in a mailbox
-- `useWildduckGetMessage` - Get a single message
-- `useWildduckUpdateMessage` - Update message properties (mark as read, move, flag)
-- `useWildduckDeleteMessage` - Delete a message
-- `useWildduckSearchMessages` - Search messages across mailboxes
-- `useWildduckGetMessageSource` - Get raw RFC822 message source
-- `useWildduckGetMessageAttachment` - Download message attachment
-- `useWildduckForwardMessage` - Forward a message
-- `useWildduckSendMessage` - Send a new email
-- `useWildduckUploadMessage` - Upload raw message to mailbox
-- `useWildduckSubmitDraft` - Submit a draft for delivery
+### Monolithic hooks (recommended)
 
-### Mailboxes
+- `useWildduckMessages` - Message list with pagination; `getMessages`, `sendMessage`, `uploadMessage`, `updateMessage`, `deleteMessage`, `moveMessage`; optional WebSocket
+- `useWildduckMessage` - Single-message operations: get, update, delete, forward, submit draft
+- `useWildduckUser` - Single user: profile, quota, limits, spam, forwarding, encryption, 2FA
+- `useWildduckSearch` - Search messages with accumulated pagination
+- `useWildduckAuth` - `authenticate`, `preAuth`, `logout`, `getAuthStatus`
 
-- `useWildduckGetMailboxes` - List all mailboxes
-- `useWildduckGetMailbox` - Get specific mailbox info
-- `useWildduckCreateMailbox` - Create new mailbox/folder
-- `useWildduckUpdateMailbox` - Update mailbox properties
-- `useWildduckDeleteMailbox` - Delete a mailbox
+### TanStack Query hooks (read-only)
 
-### Users
+- `useWildduckHealth`, `useWildduckUsersList`, `useWildduckUser`, `useWildduckUserAddresses`,
+  `useWildduckUserMessages`, `useWildduckMessage`, `useWildduckUserFilters`,
+  `useWildduckUserSettings`, `useWildduckUserMailboxes`, `useWildduckAuthStatus`,
+  `useWildduckSearchMessages`
 
-- `useWildduckGetUser` - Get user information
-- `useWildduckCreateUser` - Create new user (admin)
-- `useWildduckUpdateUser` - Update user settings
-- `useWildduckDeleteUser` - Delete user account
+### Deprecated individual domain hooks
 
-### Addresses
+- `useWildduckMailboxes`, `useWildduckSettings`, `useWildduckFilters`, `useWildduckAddresses`,
+  `useWildduckAutoReply` (each supports optional WebSocket)
 
-- `useWildduckGetAddresses` - List user's email addresses
-- Additional address management hooks
-
-### Autoreply
-
-- `useWildduckGetAutoreply` - Get autoreply settings
-- `useWildduckUpdateAutoreply` - Update autoreply (vacation mode)
-- `useWildduckDeleteAutoreply` - Delete autoreply
-
-### Filters
-
-- Complete filter management hooks
-
-### Other
-
-- `useWildduckHealth` - Server health check
-- `useWildduckSettings` - Settings management
+> Operations without a dedicated hook (forwarding, send, upload, mailbox/filter/address/autoreply
+> CRUD) are available as methods on `WildduckClient` and as helper functions in
+> [`src/utils`](./src/utils).
 
 For detailed documentation on all hooks, see [docs/HOOKS_DOCUMENTATION.md](./docs/HOOKS_DOCUMENTATION.md).
 
@@ -264,64 +243,70 @@ const { mailboxes } = useWildduckMailboxes(
 
 ## Development
 
-### Setup
+This repo uses **Bun** as its package manager (`bun.lock`). Dev dependencies resolve
+`@sudobility/*` from GitHub Packages via the repo `.npmrc`, so a `read:packages` token must be
+available (e.g. `GITHUB_TOKEN`). The commands below show `bun`; `npm run <script>` works too.
 
 ```bash
 # Install dependencies
-npm install
+bun install
 
-# Run type checking
-npm run typecheck
-
-# Run linting
-npm run lint
-
-# Run unit tests
-npm test
-
-# Run integration tests (requires WildDuck server)
-WILDDUCK_ENDPOINT=http://localhost:8080 npm run test:integration
-
-# Build the library
-npm run build
+# Type-check, lint, unit-test, then build
+bun run typecheck
+bun run lint
+bun run test:unit
+bun run build
 ```
 
 ### Development Scripts
 
+> Note: there is **no** plain `test` script. Use `test:unit` (excludes integration tests),
+> `test:run` (runs everything once), or `test:watch`.
+
 ```bash
-npm run build              # Build for production
-npm run build:watch        # Build in watch mode
-npm run clean              # Clean build artifacts
-npm run test               # Run tests in watch mode
-npm run test:run           # Run tests once
-npm run test:coverage      # Run tests with coverage
-npm run test:integration   # Run integration tests
-npm run lint               # Run ESLint
-npm run lint:fix           # Fix linting issues
-npm run format             # Format code with Prettier
-npm run typecheck          # Run TypeScript type checking
-npm run check-all          # Run all checks (lint + typecheck + test)
+bun run build              # Build: tsc (tsconfig.build.json) + scripts/fix-esm-imports.mjs
+bun run build:watch        # Compile in watch mode (tsc --watch; skips the ESM fix step)
+bun run clean              # Remove dist/
+bun run test:unit          # Run unit tests once (excludes *.integration.test.ts)
+bun run test:run           # Run all tests once
+bun run test:watch         # Run tests in watch mode
+bun run test:coverage      # Run tests with v8 coverage
+bun run test:integration   # Run integration tests (requires a WildDuck server)
+bun run lint               # Run ESLint over src/
+bun run lint:fix           # Auto-fix ESLint issues
+bun run format             # Format src with Prettier
+bun run format:check       # Check formatting
+bun run typecheck          # Type-check without emitting (tsc --noEmit)
+bun run check-all          # lint + typecheck + test:unit
 ```
+
+> The `build` script runs `scripts/fix-esm-imports.mjs` after `tsc` to rewrite relative imports
+> in the emitted output to fully-qualified ESM specifiers (e.g. `./core` → `./core/index.js`) so
+> Node's native ESM loader can resolve them. `build:watch` does not run this step.
 
 ## Testing
 
 ### Unit Tests
 
+Unit tests run under Vitest with the `happy-dom` environment.
+
 ```bash
-npm run test:run
+bun run test:unit    # excludes integration tests
 ```
 
 ### Integration Tests
 
-Integration tests require a live WildDuck server running in crypto mode:
+Integration tests require a live WildDuck server. They are **skipped** unless `WILDDUCK_ENDPOINT`
+is set (see `.env.example`):
 
 ```bash
-# Set required environment variables
+# Set environment variables (or copy .env.example to .env)
 export WILDDUCK_ENDPOINT=http://localhost:8080
 export WILDDUCK_EMAIL_DOMAIN=example.com  # Optional
+export WILDDUCK_API_TOKEN=                 # Optional, for admin operations
 
 # Run integration tests
-npm run test:integration
+bun run test:integration
 ```
 
 For more details, see [docs/INTEGRATION_TESTS.md](./docs/INTEGRATION_TESTS.md).
@@ -340,18 +325,17 @@ For more details, see [docs/INTEGRATION_TESTS.md](./docs/INTEGRATION_TESTS.md).
 ```
 wildduck_client/
 ├── src/
-│   ├── network/          # API client and HTTP layer
-│   ├── hooks/            # React hooks for data fetching
-│   │   ├── messages/     # Message-related hooks
-│   │   ├── mailboxes/    # Mailbox-related hooks
-│   │   ├── addresses/    # Address-related hooks
-│   │   ├── autoreply/    # Autoreply-related hooks
-│   │   └── users/        # User-related hooks
-│   ├── types/            # TypeScript type definitions
-│   ├── utils/            # Utility functions
-│   └── __tests__/        # Test files
+│   ├── index.ts          # Entry point - re-exports every module
+│   ├── network/          # WildduckClient class, factory, error types
+│   ├── hooks/            # React hooks (flat files, one per hook)
+│   ├── websocket/        # WebSocket client, provider, protocol
+│   ├── components/       # React components (WebSocketStatus)
+│   ├── types/            # Search query/response types
+│   ├── utils/            # Settings/forwarding/spam/filter helpers
+│   └── __tests__/
 │       └── integration/  # Integration tests
-├── dist/                 # Compiled output
+├── scripts/              # Build helpers (fix-esm-imports.mjs)
+├── dist/                 # Compiled output (generated)
 └── docs/                 # Documentation files
 ```
 
@@ -377,19 +361,22 @@ This project maintains high code quality standards:
 
 ## Deployment
 
-### NPM Publishing
+### Publishing
 
-The library is automatically published to NPM when you push to the `main` branch:
+The package is published to **GitHub Packages** (`npm.pkg.github.com`) via the CI/CD workflow
+(`.github/workflows/ci-cd.yml`, which calls the shared `johnqh/workflows` reusable workflow) on
+pushes to `main`:
 
 1. Update version: `npm version patch|minor|major`
 2. Push to main: `git push origin main --tags`
-3. CI/CD automatically publishes to NPM
+3. CI/CD runs checks and publishes automatically
 
-For more details, see [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
+`prepublishOnly` runs `clean` + `build` before any publish. For more details, see
+[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) and [docs/CI_CD_SETUP.md](./docs/CI_CD_SETUP.md).
 
 ## License
 
-MIT
+Business Source License 1.1 (BUSL-1.1). See `package.json` for the declared license.
 
 ## Related Projects
 
